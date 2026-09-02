@@ -1,0 +1,14 @@
+# Run logs — machine-specific, not useful to anyone else
+logs/
+*.log
+
+# State written at apply time, specific to one machine
+mime_defaults.backup
+
+# Backups this repo takes of config files
+*.bak.*
+
+# Editor / OS noise
+*~
+.*.swp
+.DS_Store
