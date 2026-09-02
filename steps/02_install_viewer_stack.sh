@@ -62,6 +62,28 @@ while [ $# -gt 0 ]; do
 done
 parse_common_flags "${ARGS[@]+"${ARGS[@]}"}"
 
+# Explain the most common way this install fails on a rolling-release distro. The error
+# pacman prints ("invalid url for server", HTTP 404) names the symptom, not the cause.
+diagnose_install_failure() {
+    local newest_db age_days
+    newest_db=$(ls -t /var/lib/pacman/sync/*.db 2>/dev/null | head -1)
+    [ -z "$newest_db" ] && return 0
+    age_days=$(( ( $(date +%s) - $(stat -c %Y "$newest_db") ) / 86400 ))
+
+    info ""
+    info "LIKELY CAUSE: a stale local package database (${age_days} days old)."
+    info "Arch mirrors carry only the CURRENT build of each package; superseded builds are"
+    info "deleted. If your database still names a version that has since been rebuilt, that"
+    info "filename now returns 404 from every mirror. The fix is to refresh the database"
+    info "AND upgrade in one transaction:"
+    info ""
+    info "    sudo pacman -Syu"
+    info ""
+    warn "Do NOT run 'pacman -Sy <package>'. Syncing the database without upgrading leaves"
+    warn "the system in a partial-upgrade state, where newly installed packages are built"
+    warn "against libraries you do not have. That breaks things in confusing ways later."
+}
+
 heading "Step 2 — install faster viewers and the archive helper"
 print_machine_line
 announce_mode
@@ -100,12 +122,33 @@ heading "Official repository packages"
 for p in "${ALREADY[@]+"${ALREADY[@]}"}";   do ok   "$p is already installed"; done
 for p in "${TO_INSTALL[@]+"${TO_INSTALL[@]}"}"; do info "$p will be installed"; done
 
+# Tracks whether anything actually failed, so the summary cannot claim success after a
+# failed transaction. pacman is ATOMIC: if one package in the set fails to download, NOTHING
+# in that transaction is installed -- not even the packages that downloaded fine.
+INSTALL_FAILED=0
+
 if [ "${#TO_INSTALL[@]}" -gt 0 ]; then
     # --needed makes this idempotent: already-current packages are left alone rather than
     # reinstalled, so re-running the script is cheap and safe.
-    run $SUDO pacman -S --needed "${TO_INSTALL[@]}"
+    run $SUDO pacman -S --needed "${TO_INSTALL[@]}" || INSTALL_FAILED=1
 else
     ok "all repository packages already present"
+fi
+
+# Ground truth beats exit codes: ask the package database what is actually installed now,
+# rather than trusting that a zero exit meant success.
+if [ "$DRY_RUN" -eq 0 ] && [ "${#TO_INSTALL[@]}" -gt 0 ]; then
+    STILL_MISSING=()
+    for p in "${TO_INSTALL[@]}"; do
+        pkg_installed "$p" || STILL_MISSING+=("$p")
+    done
+    if [ "${#STILL_MISSING[@]}" -gt 0 ]; then
+        INSTALL_FAILED=1
+        fail "still not installed after the attempt: ${STILL_MISSING[*]}"
+        diagnose_install_failure
+    else
+        ok "all repository packages installed"
+    fi
 fi
 
 # ── AUR packages ───────────────────────────────────────────────────────────────
@@ -133,7 +176,12 @@ else
             # Deliberately NOT passing --noconfirm: AUR builds occasionally ask real
             # questions (dependency choices, conflicting providers) that should not be
             # auto-answered on someone else's workstation.
-            run "$HELPER" -S --needed "${AUR_TODO[@]}"
+            run "$HELPER" -S --needed "${AUR_TODO[@]}" || INSTALL_FAILED=1
+            if [ "$DRY_RUN" -eq 0 ]; then
+                for p in "${AUR_TODO[@]}"; do
+                    pkg_installed "$p" || { INSTALL_FAILED=1; fail "$p was not installed"; }
+                done
+            fi
         else
             ok "all requested AUR packages already present"
         fi
@@ -144,6 +192,12 @@ fi
 heading "Next"
 if [ "$DRY_RUN" -eq 1 ]; then
     warn "DRY RUN — nothing was installed. Re-run with --apply."
+elif [ "$INSTALL_FAILED" -eq 1 ]; then
+    fail "INSTALLATION DID NOT COMPLETE — see the errors above"
+    info "the later steps can only configure software that is actually installed"
+    # Non-zero exit so gui_perf_fix.sh reports this step as failed rather than
+    # continuing silently as though it had worked.
+    exit 1
 else
     ok "installation step complete"
     info "run steps/03_enable_gpu_accel.sh next — installing LibreOffice is not enough,"
