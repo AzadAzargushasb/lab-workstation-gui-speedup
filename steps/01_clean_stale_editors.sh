@@ -60,7 +60,15 @@ announce_mode
 
 PATTERN='editors_helper|DesktopEditors'
 
-if ! pgrep -f "$PATTERN" >/dev/null 2>&1; then
+# Count real processes by matching the COMMAND NAME (comm), never the full command line.
+# Matching the command line with `pgrep -f` would also match any shell running a command
+# that merely contains the word "editors_helper" -- including this script itself -- and
+# report processes that do not exist.
+count_editors() {
+    ps -eo comm --no-headers 2>/dev/null | grep -cE "^(editors_helper|DesktopEditors)$"
+}
+
+if [ "$(count_editors)" -eq 0 ]; then
     ok "no OnlyOffice processes are running — nothing to do"
     exit 0
 fi
@@ -138,7 +146,7 @@ fi
 
 # ── Report the result ──────────────────────────────────────────────────────────
 heading "Result"
-REMAIN=$(pgrep -f "$PATTERN" 2>/dev/null | wc -l)
+REMAIN=$(count_editors)
 if [ "$REMAIN" -eq 0 ]; then
     ok "no OnlyOffice processes remain — reclaimed ~${RECLAIM_MB} MB and ~${RECLAIM_CPU}% CPU"
 else
