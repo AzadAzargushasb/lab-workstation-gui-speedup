@@ -58,8 +58,6 @@ heading "Step 1 — reclaim leaked OnlyOffice processes"
 print_machine_line
 announce_mode
 
-PATTERN='editors_helper|DesktopEditors'
-
 # Count real processes by matching the COMMAND NAME (comm), never the full command line.
 # Matching the command line with `pgrep -f` would also match any shell running a command
 # that merely contains the word "editors_helper" -- including this script itself -- and
